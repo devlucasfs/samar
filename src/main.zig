@@ -400,15 +400,20 @@ fn field(line: []const u8, sec: *Section, o: *Out) ParseError!void {
 
     switch (kind) {
         .tools => {
-            try o.put("[");
-            var it = std.mem.splitScalar(u8, val, ',');
+            try o.put("[ ");
             var first = true;
+            var it = std.mem.splitScalar(u8, val, ',');
             while(it.next()) |item| {
-                if (!first) try o.put(", ");
-                first = false;
-                try stringArray(std.mem.trim(u8, item, " \t"), '`', o);
+                var parts = std.mem.splitScalar(u8, std.mem.trim(u8, item, " \t"), '`');
+                while(parts.next()) |part| {
+                    const p = std.mem.trim(u8, part, " \t");
+                    if( p.len == 0 ) return error.BadLine;
+                    if(! first ) try o.put(", ");
+                    first = false;
+                    try o.quoted(p);
+                }
             }
-            try o.put("]");
+            try o.put(" ]");
         },
         .string => try quotedValue(val, o),
         .list => try stringArray(val, ',', o),
