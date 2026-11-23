@@ -1,4 +1,5 @@
-# x86_64:linux as @arch:os
-tools: as`package, ld`package
-linking: "ld $files -o $output"
-compiling: "as -m64 $file -o $output"
+amends "{env:HOME}/.carla/Basic"
+
+override x86_64::linux {
+    dependencies {}
+}
