@@ -1,12 +1,14 @@
 #pragma once
 
 #include <cctype>
+#include <cstddef>
 #include <cstdio>
 #include <iostream>
-#include <regex>
-#include <sstream>
+#include <new>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #define KIND_TABLE(X) \
@@ -21,8 +23,21 @@ X(CBrace) \
 X(Unkown) \
 X(Eof)
 
+#define QUOTE '"'
+#define COLON ':'
+#define CRASIS '`'
+#define OBRACE '{'
+#define CBRACE '}'
+#define SIGN '='
+#define MORETHAN '>'
+#define SLASH '/'
+
+#pragma GCC visibility push(hidden)
+inline namespace samar_v1 {
+
 #define E(x) x,
 enum class Kind { KIND_TABLE(E) };
+#undef E
 
 inline std::string_view kind_to_str(Kind k) {
     #define D(x) case Kind::x: return #x;
@@ -39,43 +54,9 @@ struct Tk {
     int line = 0;
     int col  = 0;
 
+    Tk() = default;
     Tk(Kind kind, std::string lex, int line, int col)
         : kind(kind), lex(std::move(lex)), line(line), col(col) {}
-    Tk() = default;
-    ~Tk() = default;
-};
-
-#define QUOTE '"'
-#define COLON ':'
-#define CRASIS '`'
-#define OBRACE '{'
-#define CBRACE '}'
-#define SIGN '='
-#define MORETHAN '>'
-#define SLASH '/'
-
-struct Src {
-    FILE *f;
-    int line = 1, col = 1;
-    int last_line = 1, last_col = 1;
-
-    explicit Src(FILE *f) : f(f) {}
-
-    int get() {
-        int c = getc(f);
-        last_line = line;
-        last_col = col;
-        if( c == '\n' ) { line++; col = 1; }
-        else if( c != EOF ) col++;
-        return c;
-    }
-
-    void unget(int c) {
-        if( c == EOF ) return;
-        ungetc(c, f);
-        line = last_line;
-        col = last_col;
-    }
 };
 
 inline void lex_dbg(const std::vector<Tk>& vec) {
@@ -91,11 +72,37 @@ inline void lex_dbg(const std::vector<Tk>& vec) {
     }
 }
 
-inline void check(std::vector<Tk>& vec, std::stringstream& ss, int line, int col) {
-    std::string val = ss.str();
-    ss.str(""); ss.clear();
+struct Src {
+    std::string data;
+    std::size_t pos = 0;
+    int line = 1, col = 1;
 
-    if( val.empty() ) return;
+    bool eof() const { return pos >= data.size(); }
+
+    int peek() const {
+        return eof() ? EOF : (unsigned char)data[pos];
+    }
+
+    int get() {
+        if( eof() ) return EOF;
+        unsigned char c = (unsigned char)data[pos++];
+        if( c == '\n' ) { line++; col = 1; }
+        else col++;
+        return c;
+    }
+};
+
+inline bool is_identifier(const std::string& s) {
+    if( s.empty() ) return false;
+    unsigned char c0 = (unsigned char)s[0];
+    if( !(std::isalpha(c0) || c0 == '_') ) return false;
+    for( unsigned char c : s )
+        if( !(std::isalnum(c) || c == '_') ) return false;
+    return true;
+}
+
+inline void flush_word(std::vector<Tk>& out, std::string& cur, int line, int col) {
+    if( cur.empty() ) return;
 
     static const std::string_view keywords[] = {
         "architecture", "rule", "runner",
@@ -103,140 +110,147 @@ inline void check(std::vector<Tk>& vec, std::stringstream& ss, int line, int col
         "log", "when", "$os", "-eq", "amends"
     };
 
+    Kind kind = Kind::Unkown;
     for( auto sv : keywords ) {
-        if( sv != val ) continue;
-        vec.push_back(Tk(Kind::Keyword, val, line, col));
-        return;
+        if( sv == cur ) { kind = Kind::Keyword; break; }
     }
+    if( kind == Kind::Unkown && is_identifier(cur) )
+        kind = Kind::Identifier;
 
-    static const std::regex identifier("[a-zA-Z_][_a-zA-Z0-9]*");
-    if( std::regex_match(val, identifier) ) {
-        vec.push_back(Tk(Kind::Identifier, val, line, col));
-        return;
-    }
+    if( kind != Kind::Unkown )
+        out.emplace_back(kind, std::move(cur), line, col);
 
-    vec.push_back(Tk(Kind::Unkown, val, line, col));
+    cur.clear();
 }
 
-inline std::vector<Tk> lexer(FILE *file) {
-    std::vector<Tk> vec;
-    std::stringstream ss;
-    Src src(file);
+inline std::vector<Tk> lexer_string(std::string text) {
+    std::vector<Tk> out;
+    std::string cur;
+    Src src;
+    src.data = std::move(text);
 
     int start_line = 0, start_col = 0;
+    int cl = 0, cc = 0;
 
-    auto append = [&](int ch) {
-        if( ss.str().empty() ) {
-            start_line = src.last_line;
-            start_col  = src.last_col;
-        }
-        ss << (char)ch;
-    };
+    try {
+        while( !src.eof() ) {
+            cl = src.line;
+            cc = src.col;
+            int ch = src.get();
 
-    auto flush = [&]() { check(vec, ss, start_line, start_col); };
+            if( ch == OBRACE ) {
+                flush_word(out, cur, start_line, start_col);
+                out.emplace_back(Kind::OBrace, "{", cl, cc);
+                continue;
+            }
 
-    while( true ) {
-        int ch = src.get();
-        if( ch == EOF ) break;
+            if( ch == CBRACE ) {
+                flush_word(out, cur, start_line, start_col);
+                out.emplace_back(Kind::CBrace, "}", cl, cc);
+                continue;
+            }
 
-        int cl = src.last_line, cc = src.last_col;
-
-        if( ch == OBRACE ) {
-            flush();
-            vec.push_back(Tk(Kind::OBrace, "{", cl, cc));
-            continue;
-        }
-
-        if( ch == CBRACE ) {
-            flush();
-            vec.push_back(Tk(Kind::CBrace, "}", cl, cc));
-            continue;
-        }
-
-        if( ch == SLASH ) {
-            int n = src.get();
-            if( n == SLASH ) {
-                flush();
+            if( ch == SLASH && src.peek() == SLASH ) {
+                flush_word(out, cur, start_line, start_col);
+                int n;
                 while( (n = src.get()) != EOF && n != '\n' );
                 continue;
             }
-            src.unget(n);
-            append(ch);
-            continue;
-        }
 
-        if( std::isspace((unsigned char)ch) ) {
-            flush();
-            continue;
-        }
-
-        if( ch == COLON ) {
-            int n = src.get();
-            if( n == COLON ) {
-                flush();
-                vec.push_back(Tk(Kind::Quad, "::", cl, cc));
+            if( std::isspace((unsigned char)ch) ) {
+                flush_word(out, cur, start_line, start_col);
                 continue;
             }
-            src.unget(n);
-            append(ch);
-            continue;
-        }
 
-        if( ch == SIGN ) {
-            int n = src.get();
-            if( n == MORETHAN ) {
-                flush();
-                vec.push_back(Tk(Kind::Arrow, "=>", cl, cc));
+            if( ch == COLON && src.peek() == COLON ) {
+                src.get();
+                flush_word(out, cur, start_line, start_col);
+                out.emplace_back(Kind::Quad, "::", cl, cc);
                 continue;
             }
-            src.unget(n);
-            append(ch);
-            continue;
-        }
 
-        if( ch == QUOTE ) {
-            flush();
-
-            std::string s;
-            int ch2;
-
-            while( true ) {
-                while( (ch2 = src.get()) != QUOTE && ch2 != EOF ) s += (char)ch2;
-                if( ch2 == EOF ) break;
-
-                while( (ch2 = src.get()) != EOF && std::isspace((unsigned char)ch2) );
-                if( ch2 == QUOTE ) { s += ' '; continue; }
-
-                src.unget(ch2);
-                break;
+            if( ch == SIGN && src.peek() == MORETHAN ) {
+                src.get();
+                flush_word(out, cur, start_line, start_col);
+                out.emplace_back(Kind::Arrow, "=>", cl, cc);
+                continue;
             }
 
-            vec.push_back(Tk(Kind::String, s, cl, cc));
-            continue;
+            if( ch == QUOTE ) {
+                flush_word(out, cur, start_line, start_col);
+
+                std::string s;
+                while( true ) {
+                    int c;
+                    while( (c = src.get()) != QUOTE && c != EOF ) s += (char)c;
+                    if( c == EOF ) break;
+
+                    while( !src.eof() && std::isspace((unsigned char)src.peek()) ) src.get();
+
+                    if( src.peek() == QUOTE ) {
+                        src.get();
+                        s += ' ';
+                        continue;
+                    }
+                    break;
+                }
+
+                out.emplace_back(Kind::String, std::move(s), cl, cc);
+                continue;
+            }
+
+            if( ch == CRASIS ) {
+                flush_word(out, cur, start_line, start_col);
+
+                std::string s;
+                int c;
+                while( (c = src.get()) != CRASIS && c != EOF ) s += (char)c;
+
+                out.emplace_back(Kind::Runner, std::move(s), cl, cc);
+                continue;
+            }
+
+            if( cur.empty() ) {
+                start_line = cl;
+                start_col  = cc;
+            }
+            cur += (char)ch;
         }
 
-        if( ch == CRASIS ) {
-            flush();
-
-            std::string s;
-            int ch2;
-            while( (ch2 = src.get()) != CRASIS && ch2 != EOF ) s += (char)ch2;
-
-            vec.push_back(Tk(Kind::Runner, s, cl, cc));
-            continue;
-        }
-
-        append(ch);
+        flush_word(out, cur, start_line, start_col);
+        out.emplace_back(Kind::Eof, "<eof>", src.line, src.col);
+        return out;
     }
-
-    flush();
-    vec.push_back(Tk(Kind::Eof, "<eof>", src.line, src.col));
-
-    std::vector<Tk> v2;
-    for( auto& v : vec ) {
-        if( v.kind == Kind::Unkown ) continue;
-        v2.push_back(v);
+    catch (const std::bad_alloc&) {
+        std::cerr << "[bad_alloc] no lexer | pos=" << src.line << ":" << src.col
+                  << " | tokens=" << out.size()
+                  << " | token_atual.size=" << cur.size() << "\n";
+        throw;
     }
-
-    return v2;
 }
+
+inline std::vector<Tk> lexer(FILE *file) {
+    if( !file )
+        throw std::runtime_error("lexer: FILE* is null");
+
+    std::string text;
+    char buf[4096];
+    std::size_t n;
+    while( (n = std::fread(buf, 1, sizeof buf, file)) > 0 )
+        text.append(buf, n);
+
+    return lexer_string(std::move(text));
+}
+
+}
+#pragma GCC visibility pop
+
+#undef QUOTE
+#undef COLON
+#undef CRASIS
+#undef OBRACE
+#undef CBRACE
+#undef SIGN
+#undef MORETHAN
+#undef SLASH
+#undef KIND_TABLE

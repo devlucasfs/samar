@@ -1,14 +1,17 @@
+#pragma once
+
 #include "lexer.hpp"
 #include "platform.hpp"
 
 #include <cstddef>
+#include <cstdio>
 #include <cstdlib>
 #include <iostream>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
-#include <cstdlib>
 #include <filesystem>
 #include <sstream>
 #ifdef _WIN32
@@ -16,18 +19,6 @@
 #else
   #include <unistd.h>
 #endif
-
-namespace fs = std::filesystem;
-struct SamarState {
-    std::vector<std::string> architectures;
-    std::unordered_map<std::string, std::vector<Tk>> rules;
-    std::unordered_map<std::string, std::vector<Tk>> runners;
-    std::unordered_map<std::string, std::vector<Tk>> dependenciess;
-    std::vector<std::pair<std::string, std::string>> args;
-    std::string at, ns;
-
-    SamarState() = default;
-};
 
 #define GTK(j) vec.at(j)
 
@@ -44,6 +35,22 @@ struct SamarState {
 #define rule "rule"
 #define log "log"
 #define die "die"
+
+#pragma GCC visibility push(hidden)
+inline namespace samar_v1 {
+
+namespace fs = std::filesystem;
+
+struct SamarState {
+    std::vector<std::string> architectures;
+    std::unordered_map<std::string, std::vector<Tk>> rules;
+    std::unordered_map<std::string, std::vector<Tk>> runners;
+    std::unordered_map<std::string, std::vector<Tk>> dependenciess;
+    std::vector<std::pair<std::string, std::string>> args;
+    std::string at, ns;
+
+    SamarState() = default;
+};
 
 void parser_over_vec(SamarState *state, std::vector<Tk>& vec);
 
@@ -257,12 +264,8 @@ void print_wrapped(const std::string& text, std::size_t width) {
             line.clear();
             len = 0;
         }
-        else if( c == ' ' || c == '\t' || c == '\r' ) {
-            flush_word();
-        }
-        else {
-            word += c;
-        }
+        else if( c == ' ' || c == '\t' || c == '\r' ) flush_word();
+        else word += c;
     }
 
     flush_word();
@@ -308,13 +311,9 @@ void parse_rule(SAMAR_PARSER_ARGS_IMPORT) {
     if( brace.kind != Kind::OBrace )
         emissor("A rule need a block. Make one opening a brance. `{`");
 
-    Tk current;
-    std::vector<Tk> block;
-    while( (current = GTK(i++)).kind != Kind::CBrace )
-        block.push_back(current);
+    std::vector<Tk> block = collect_block(vec, i);
 
     state->rules.insert({ identifier.lex, block });
-    i--;
 }
 
 static void parse_dependencies_entries(SamarState *state, std::vector<Tk>& block) {
@@ -327,8 +326,8 @@ static void parse_dependencies_entries(SamarState *state, std::vector<Tk>& block
         }
 
         auto cli = block.at(i++);
-        if( cli.kind != Kind::Identifier )
-            emissor("Expected an Identifier: The CLI name; Right syntax: cli => rule : " + cli.lex);
+        if( cli.kind != Kind::Identifier && cli.kind != Kind::String )
+            emissor("Expected an Identifier or a String: The CLI name; Right syntax: cli => rule : " + cli.lex);
 
         auto arr = block.at(i++);
         if( arr.kind != Kind::Arrow )
@@ -366,10 +365,7 @@ void parse_runner(SAMAR_PARSER_ARGS_IMPORT, bool override, bool ns = false) {
     if( brace.kind != Kind::OBrace )
         emissor("A runner keyword need a block. Make one opening a brance. `{`");
 
-    Tk current;
-    std::vector<Tk> block;
-    while( (current = GTK(++i)).kind != Kind::CBrace )
-        block.push_back(current);
+    std::vector<Tk> block = collect_block(vec, i);
 
     auto runner_name = state->ns + "::" + identifier.lex;
     if( state->runners.contains(runner_name) && !override )
@@ -431,8 +427,18 @@ void parse_amends(SAMAR_PARSER_ARGS_IMPORT) {
     if( string.kind != Kind::String )
         emissor("After an amends keyword you need enter with a String which is the file you want to amend.");
 
-    auto f = std::fopen(expand(string.lex, state).c_str(), "r+");
-    std::vector<Tk> tks = lexer(f);
+    auto path = expand(string.lex, state);
+    auto f = std::fopen(path.c_str(), "r");
+    if( !f )
+        emissor("amends: cannot open file `" + path + "`.");
+
+    std::vector<Tk> tks;
+    try {
+        tks = lexer(f);
+    } catch(...) {
+        std::fclose(f);
+        throw;
+    }
     std::fclose(f);
 
     parser_over_vec(state, tks);
@@ -456,9 +462,32 @@ void parser_over_vec(SamarState *state, std::vector<Tk>& vec) {
         if( tk.kind == Kind::Runner ) c(parse_bash)
     }
 }
+#undef c
 
 SamarState *parser(std::vector<Tk> vec) {
     SamarState *state = new SamarState();
-    parser_over_vec(state, vec);
+    try {
+        parser_over_vec(state, vec);
+    } catch(...) {
+        delete state;
+        throw;
+    }
     return state;
 }
+
+} // namespace samar_v1
+#pragma GCC visibility pop
+
+#undef architecture
+#undef dependencies
+#undef override_key
+#undef runner
+#undef amends
+#undef when
+#undef rule
+#undef log
+#undef die
+#undef GTK
+#undef SAMAR_PARSER_ARGS_EXPORT
+#undef SAMAR_PARSER_ARGS_SUB
+#undef SAMAR_PARSER_ARGS_IMPORT

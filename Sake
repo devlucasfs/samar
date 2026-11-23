@@ -1,0 +1,90 @@
+rule package {
+    when $os -eq "x86_64-linux" {
+        die "{@} is not installed, but it was declared in the Sake as a `package`.\n"
+            "Try installing it with:\n~> e.g. sudo pacman -S {@}"
+    }
+}
+
+rule expressif {
+    die "You don't have expressif toolchain intalled. Or is out of your PATHs. Download it or update our paths.\n"
+}
+
+architecture x86_64
+architecture avr_atmega328p
+architecture xtensa_lx7
+
+avr_atmega328p::arduino {
+    dependencies {
+        when $os -eq "x86_64-linux" {
+            "avr-gcc"     => package
+            "avr-objcopy" => package
+            "avr-objdump" => package
+            "avrdude"     => package
+        }
+    }
+
+    runner native_bin {
+        when $os -eq "x86_64-linux" {
+            `avr-gcc -nostartfiles -mmcu=atmega328p -Wall -Os -o {elf} {asm}`
+            `avr-objcopy -O ihex -R .eeprom {elf} {hex}`
+        }
+    }
+
+    runner upload {
+        when $os -eq "x86_64-linux" {
+            `sudo avrdude -F -V -c arduino -p m328p -P {device} -b {baudrate} -U flash:w:{hex}:i`
+        }
+    }
+
+}
+
+xtensa_lx7::esp32 {
+    dependencies {
+        when $os -eq "x86_64-linux" {
+            esptool  => package
+            "idf.py" => package
+        }
+    }
+    runner native_bin {
+        when $os -eq "x86_64-linux" {
+            `cd {target} &&([ -d carla-idf ] || idf.py create-project carla-idf) && cd carla-idf && mkdir -p src main && cp {file} src/main.S && echo 'idf_component_register(SRCS ../src/main.S INCLUDE_DIRS .)' > main/CMakeLists.txt && echo 'cmake_minimum_required(VERSION 3.16)' > CMakeLists.txt  && echo 'include($ENV{IDF_PATH}/tools/cmake/project.cmake)' >> CMakeLists.txt && echo 'project(carla-idf)' >> CMakeLists.txt  && idf.py set-target esp32 && idf.py build`
+        }
+    }
+
+    runner upload {
+        when $os -eq "x86_64-linux" {
+            `cd {folder} && idf.py -p {device} flash`
+        }
+    }
+}
+
+x86_64::linux {
+    dependencies {
+        when $os -eq "x86_64-linux" {
+            as => package
+            ld => package
+            ar => package
+        }
+    }
+
+    runner native_bin {
+        when $os -eq "x86_64-linux" {
+            `as {asm} -o {obj}`
+            `ld {obj} -o {bin}`
+        }
+    }
+
+    runner static_archive {
+        when $os -eq "x86_64-linux" {
+            `as {asm} -o {obj}`
+            `ar rcs {archive} -o {obj}`
+        }
+    }
+
+    runner shared_shared {
+        when $os -eq "x86_64-linux" {
+            `as {asm} -o {obj}`
+            `ld -shared {obj} -o {bin}`
+        }
+    }
+}
