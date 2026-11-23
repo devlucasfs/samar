@@ -1,5 +1,0 @@
-amends "{env:HOME}/.carla/Basic"
-
-override x86_64::linux {
-    dependencies {}
-}
