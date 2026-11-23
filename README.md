@@ -16,7 +16,7 @@ This allows a build description to call any tool already available on the host s
 
 # Getting Started
 
-To begin writing Samar code, you should first understand three of its core principles: **rules**, **dependencies** and **runners**. Each of them is described below, with an example. A complete, working build that combines all three is presented at the end of this document.
+To begin writing Samar code, you should first understand three of its core principles: **rules**, **dependencies** and **runners**. Each of them is described below, with an example. Conditional blocks, overrides, includes and a complete, working build that combines everything are presented afterwards.
 
 ### Rules
 
@@ -58,7 +58,7 @@ x86_64::linux {
 
 Because the rule is chosen per dependency, different dependencies may be handled differently. A missing compiler could trigger one rule, while a missing optional utility triggers another.
 
-The `dependencies` field is overridable, so a more specific namespace may replace the list defined for a more general one when a target requires different tools.
+The `dependencies` field is overridable. See [Overriding a Namespace](#overriding-a-namespace) for how to do it.
 
 ### Runners
 
@@ -150,9 +150,139 @@ Both statements accept the placeholders described earlier, such as `{@}` inside 
 | `die`     | `stderr`      | Yes, with status `14`  | Fatal errors, such as a missing dependency |
 | `log`     | `stderr`      | No                     | Debugging output and warnings |
 
+### Conditional Blocks: `when`
+
+A build rarely behaves the same way on every platform. The `when` statement runs a block only if a condition is true, which makes it possible to adapt dependencies and build steps to the target in use.
+
+Its form is:
+
+```perl
+when <condition> {
+    ...
+}
+```
+
+The condition is a comparison between two values. If it is true, the statements inside the braces are executed (or, inside `dependencies`, the listed dependencies are required). If it is false, the whole block is skipped. Statements outside the block are not affected and always run.
+
+`when` can be used both inside `dependencies` and inside a runner:
+
+```perl
+x86_64::linux {
+    dependencies {
+        when $os -eq "x86_64-linux" {
+            as => package
+            ld => package
+        }
+    }
+
+    runner binary {
+        when $os -eq "x86_64-linux" {
+            log "Building for x86_64 [LINUX]..."
+        }
+
+        log "Build finished!"
+    }
+}
+```
+
+#### The `$os` variable
+
+`$os` holds the platform on which the build is running, in the format `arch-os`: the architecture and the operating system joined by a hyphen. For example, an x86_64 machine running Linux is `x86_64-linux`.
+
+#### Comparison operators
+
+Currently, `-eq` is the only comparison operator available. It is true when both sides are equal:
+
+```perl
+when $os -eq "x86_64-linux" {
+    ...
+}
+```
+
+### Overriding a Namespace
+
+A namespace that has already been defined can be changed with `override`. This is useful when a particular target needs a different set of dependencies, or a different behavior for a runner, without rewriting the whole namespace.
+
+The syntax is:
+
+```perl
+override <namespace> {
+    runner <id> {
+        ...
+    }
+
+    dependencies {
+        ...
+    }
+}
+```
+
+An `override` block may contain a `dependencies` field and any number of runners. A runner is overridden when it uses the same id as a runner that already exists in that namespace; the new body takes the place of the previous one.
+
+The example below overrides the dependencies and the `binary` runner of `x86_64::linux`:
+
+```perl
+architecture x86_64
+
+x86_64::linux {
+    dependencies {
+        as => package
+        ld => package
+    }
+
+    runner binary {
+        log "Default build"
+    }
+}
+
+override x86_64::linux {
+    dependencies {
+        as   => package
+        ld   => package
+        nasm => package
+    }
+
+    runner binary {
+        log "Custom build"
+    }
+}
+```
+
+### Including Other Files: `amends`
+
+`amends` includes another build file into the current one, in the same way as `#include` in C. Everything defined in the referenced file, such as rules, namespaces and runners, becomes available as if it had been written at that point. This makes it possible to keep shared definitions in a single file and reuse them across several projects.
+
+```perl
+amends "{env:HOME}/.samar/Basic"
+```
+
+By default, `amends` uses `pragma always`. This is the opposite of `pragma once`: there is no include guard, so the behavior is that of a plain C `#include` in a header that does not use `#pragma once`.
+
+#### The `{env:HOME}` placeholder
+
+`{env:HOME}` is replaced by the home directory of the current user. It can be used in any string, but it was designed specifically for `amends`: it allows the path of an included file to be written without hardcoding a user name, so the same build file works on every machine.
+
+#### Using `amends` with `override`
+
+`amends` is simply a way of importing common code. The imported definitions can be used exactly as they are, or modified with an `override` block when a project needs something different. `override` works normally on amended code, but the two features are independent: neither requires the other, and `amends` does not have to appear in any particular position relative to an `override`.
+
+For example, a project may import a common file and change only one runner of it:
+
+```perl
+amends "{env:HOME}/.samar/Basic"
+
+override x86_64::linux {
+    dependencies {}
+
+    runner test {
+        log "Overridden test runner"
+    }
+}
+```
+
 # A Complete Example
 
-The following build brings the three principles together. It declares a `package` rule, lists the dependencies required on x86_64 Linux, and defines a runner that assembles and links a program:
+The following build brings the main principles together. It declares a `package` rule, lists the dependencies required on x86_64 Linux, and defines a runner that assembles and links a program:
 
 ```perl
 architecture x86_64
@@ -165,9 +295,8 @@ rule package {
 x86_64::linux {
     dependencies {
         when $os -eq "x86_64-linux" {
-            as  => package
-            ld  => package
-            rafael => package
+            as => package
+            ld => package
         }
     }
 
@@ -189,7 +318,7 @@ The example can be read from top to bottom:
 1. **Architecture.** `architecture x86_64` selects the architecture that the namespaces below belong to.
 2. **Rule.** The `package` rule is declared once, at the top level, so that every dependency in the file can refer to it. If a dependency is missing, the rule stops the build with `die` and tells the user which package to install, using `{@}` for the name of the missing dependency.
 3. **Namespace.** `x86_64::linux` groups everything that is specific to x86_64 on Linux: its dependencies and its runners.
-4. **Conditional blocks.** `when` executes a block only if its condition holds. Here, `$os -eq "x86_64-linux"` compares the `$os` variable with the string `"x86_64-linux"`, so the enclosed dependencies and build steps apply only to that target. Wrapping the dependencies in `when` also means they are checked only on the intended platform.
-5. **Dependencies.** The assembler (`as`), the linker (`ld`) and a third entry, `rafael`, are all bound to the `package` rule. If any of them cannot be found, `package` runs and reports the problem.
+4. **Conditional blocks.** `when $os -eq "x86_64-linux"` runs the enclosed block only when `$os`, which has the format `arch-os`, equals `x86_64-linux`. The enclosed dependencies and build steps therefore apply only to that target, and the dependencies are checked only on the intended platform.
+5. **Dependencies.** The assembler (`as`) and the linker (`ld`) are both bound to the `package` rule. If either of them cannot be found, `package` runs and reports the problem.
 6. **Runner.** The runner named `binary` logs a message, then executes two shell commands enclosed in backticks: `as` assembles the source file into an object file, and `ld` links that object file into the final executable. The placeholders `{file}`, `{object}` and `{elf}` stand for the source file, the intermediate object file and the output executable, respectively.
 7. **Final message.** The last `log` is outside the `when` block, so `Build finished!` is printed regardless of the condition.
