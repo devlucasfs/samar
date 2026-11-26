@@ -20,6 +20,8 @@ X(Quad) \
 X(Identifier) \
 X(OBrace) \
 X(CBrace) \
+X(OParen) \
+X(CParen) \
 X(Unkown) \
 X(Eof)
 
@@ -28,6 +30,8 @@ X(Eof)
 #define CRASIS '`'
 #define OBRACE '{'
 #define CBRACE '}'
+#define OPAREN '('
+#define CPAREN ')'
 #define SIGN '='
 #define MORETHAN '>'
 #define SLASH '/'
@@ -148,6 +152,18 @@ inline std::vector<Tk> lexer_string(std::string text) {
             if( ch == CBRACE ) {
                 flush_word(out, cur, start_line, start_col);
                 out.emplace_back(Kind::CBrace, "}", cl, cc);
+                continue;
+            }
+
+            if( ch == OPAREN ) {
+                flush_word(out, cur, start_line, start_col);
+                out.emplace_back(Kind::OParen, "(", cl, cc);
+                continue;
+            }
+
+            if( ch == CPAREN ) {
+                flush_word(out, cur, start_line, start_col);
+                out.emplace_back(Kind::CParen, ")", cl, cc);
                 continue;
             }
 

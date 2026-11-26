@@ -127,8 +127,8 @@ static std::vector<Tk> collect_block(std::vector<Tk>& vec, std::size_t& i) {
     return block;
 }
 
-static bool is_lparen(const Tk& t) { return t.kind == Kind::LParen; }
-static bool is_rparen(const Tk& t) { return t.kind == Kind::RParen; }
+static bool is_lparen(const Tk& t) { return t.kind == Kind::OParen; }
+static bool is_rparen(const Tk& t) { return t.kind == Kind::CParen; }
 
 static bool parse_bool_expr(std::vector<Tk>& vec, std::size_t& i);
 
