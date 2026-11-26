@@ -107,7 +107,8 @@ inline void flush_word(std::vector<Tk>& out, std::string& cur, int line, int col
     static const std::string_view keywords[] = {
         "architecture", "rule", "runner",
         "override", "dependencies", "die",
-        "log", "when", "$os", "-eq", "amends"
+        "log", "when", "$os", "-eq", "-ne",
+        "amends", "and", "or"
     };
 
     Kind kind = Kind::Unkown;

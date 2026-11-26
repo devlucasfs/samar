@@ -29,6 +29,7 @@
 #define architecture "architecture"
 #define dependencies "dependencies"
 #define override_key "override"
+#define break_key "break"
 #define runner "runner"
 #define amends "amends"
 #define when "when"
@@ -48,11 +49,17 @@ struct SamarState {
     std::unordered_map<std::string, std::vector<Tk>> dependenciess;
     std::vector<std::pair<std::string, std::string>> args;
     std::string at, ns;
+    bool broke = false;
 
     SamarState() = default;
 };
 
 void parser_over_vec(SamarState *state, std::vector<Tk>& vec);
+
+static void run_scope(SamarState *state, std::vector<Tk>& vec) {
+    parser_over_vec(state, vec);
+    state->broke = false;
+}
 
 static std::vector<std::string> split(const std::string& s, char sep) {
     std::vector<std::string> out;
@@ -120,8 +127,12 @@ static std::vector<Tk> collect_block(std::vector<Tk>& vec, std::size_t& i) {
     return block;
 }
 
-static bool parse_when_condition(std::vector<Tk>& vec, std::size_t& i) {
-    auto k = GTK(++i);
+static bool is_lparen(const Tk& t) { return t.kind == Kind::LParen; }
+static bool is_rparen(const Tk& t) { return t.kind == Kind::RParen; }
+
+static bool parse_bool_expr(std::vector<Tk>& vec, std::size_t& i);
+
+static bool parse_bool_comparison(std::vector<Tk>& vec, std::size_t& i, const Tk& k) {
     if( k.kind != Kind::Keyword )
         emissor("The first argument need to be a keyword");
 
@@ -129,15 +140,47 @@ static bool parse_when_condition(std::vector<Tk>& vec, std::size_t& i) {
     if( k.lex == "$os" ) lhs = platform();
     else emissor("Invalid keyword used.");
 
-    auto eq = GTK(++i);
-    if( eq.kind != Kind::Keyword || eq.lex != "-eq" )
-        emissor("Expected the -eq keyword. Found " + eq.lex);
+    auto op = GTK(++i);
+    if( op.kind != Kind::Keyword || (op.lex != "-eq" && op.lex != "-ne") )
+        emissor("Expected the -eq or -ne keyword. Found " + op.lex);
 
     auto string = GTK(++i);
     if( string.kind != Kind::String )
         emissor("Expected a String to compare");
 
-    return lhs == string.lex;
+    return op.lex == "-eq" ? lhs == string.lex : lhs != string.lex;
+}
+
+static bool parse_bool_primary(std::vector<Tk>& vec, std::size_t& i) {
+    auto k = GTK(++i);
+
+    if( is_lparen(k) ) {
+        bool v = parse_bool_expr(vec, i);
+        auto r = GTK(++i);
+        if( !is_rparen(r) )
+            emissor("Expected `)` to close the expression. Found " + r.lex);
+        return v;
+    }
+
+    return parse_bool_comparison(vec, i, k);
+}
+
+static bool parse_bool_expr(std::vector<Tk>& vec, std::size_t& i) {
+    bool result = parse_bool_primary(vec, i);
+
+    while( i + 1 < vec.size()
+        && vec.at(i + 1).kind == Kind::Keyword
+        && vec.at(i + 1).lex == "and" ) {
+        ++i;
+        bool rhs = parse_bool_primary(vec, i);
+        result = result && rhs;
+    }
+
+    return result;
+}
+
+static bool parse_when_condition(std::vector<Tk>& vec, std::size_t& i) {
+    return parse_bool_expr(vec, i);
 }
 
 static std::vector<Tk> parse_when_block(std::vector<Tk>& vec, std::size_t& i, bool& matched) {
@@ -291,6 +334,10 @@ void parse_die(SAMAR_PARSER_ARGS_IMPORT) {
     std::exit(14);
 }
 
+void parse_break(SAMAR_PARSER_ARGS_IMPORT) {
+    state->broke = true;
+}
+
 void parse_architecture(SAMAR_PARSER_ARGS_IMPORT) {
     auto arch = GTK(++i);
     if( arch.kind != Kind::Identifier )
@@ -340,7 +387,7 @@ static void parse_dependencies_entries(SamarState *state, std::vector<Tk>& block
         if( check_for_cli(cli.lex) ) continue;
 
         state->at = cli.lex;
-        parser_over_vec(state, state->rules.at(ruleid.lex));
+        run_scope(state, state->rules.at(ruleid.lex));
     }
 }
 
@@ -415,6 +462,7 @@ void parse_bash(SAMAR_PARSER_ARGS_IMPORT) {
 void parse_when(SAMAR_PARSER_ARGS_IMPORT) {
     bool matched = false;
     auto block = parse_when_block(vec, i, matched);
+
     if( matched ) parser_over_vec(state, block);
 }
 
@@ -441,16 +489,19 @@ void parse_amends(SAMAR_PARSER_ARGS_IMPORT) {
     }
     std::fclose(f);
 
-    parser_over_vec(state, tks);
+    run_scope(state, tks);
 }
 
 #define c(id) { id(SAMAR_PARSER_ARGS_EXPORT); continue; }
 void parser_over_vec(SamarState *state, std::vector<Tk>& vec) {
     for( std::size_t i = 0; i < vec.size(); i++ ) {
+        if( state->broke ) return;
+
         auto tk = GTK(i);
 
         if( tk.kind == Kind::Keyword && tk.lex == architecture ) c(parse_architecture);
         if( tk.kind == Kind::Keyword && tk.lex == override_key ) c(parse_override);
+        if( tk.kind == Kind::Keyword && tk.lex == break_key ) c(parse_break);
         if( tk.kind == Kind::Keyword && tk.lex == amends ) c(parse_amends);
         if( tk.kind == Kind::Keyword && tk.lex == when ) c(parse_when);
         if( tk.kind == Kind::Keyword && tk.lex == rule ) c(parse_rule);
@@ -467,7 +518,7 @@ void parser_over_vec(SamarState *state, std::vector<Tk>& vec) {
 SamarState *parser(std::vector<Tk> vec) {
     SamarState *state = new SamarState();
     try {
-        parser_over_vec(state, vec);
+        run_scope(state, vec);
     } catch(...) {
         delete state;
         throw;
@@ -481,6 +532,7 @@ SamarState *parser(std::vector<Tk> vec) {
 #undef architecture
 #undef dependencies
 #undef override_key
+#undef break_key
 #undef runner
 #undef amends
 #undef when
